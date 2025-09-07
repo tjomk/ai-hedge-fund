@@ -333,12 +333,24 @@ def generate_pabrai_output(
           DATA:
           {analysis_data}
 
-          Return EXACTLY this JSON:
+          CRITICAL: You must respond with valid JSON only, wrapped in markdown code blocks.
+
+          Return EXACTLY this format:
+
+          ```json
           {{
-            "signal": "bullish" | "bearish" | "neutral",
-            "confidence": float (0-100),
-            "reasoning": "string with Pabrai-style analysis focusing on downside protection, FCF yield, and doubling potential"
+            "signal": "bullish",
+            "confidence": 85.0,
+            "reasoning": "Your detailed Mohnish Pabrai-style analysis focusing on downside protection, FCF yield, and doubling potential"
           }}
+          ```
+
+          Required format rules:
+          - signal: Must be exactly "bullish", "bearish", or "neutral" (include quotes)
+          - confidence: A number between 0.0 and 100.0 (no quotes around numbers)
+          - reasoning: Your complete analysis in quotes as one string
+          - Start response with ```json and end with ```
+          - Use double quotes for all strings, no trailing commas
           """,
         ),
     ])

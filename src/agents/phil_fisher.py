@@ -557,10 +557,6 @@ def generate_fisher_output(
               
               For example, if bearish: "Despite operating in a growing industry, management has failed to translate R&D investments (only 5% of revenue) into meaningful new products. Margins have fluctuated between 10-15%, showing inconsistent operational execution. The company faces increasing competition from three larger competitors with superior distribution networks. Given these concerns about long-term growth sustainability..."
               
-              You must output a JSON object with:
-                - "signal": "bullish" or "bearish" or "neutral"
-                - "confidence": a float between 0 and 100
-                - "reasoning": a detailed explanation
               """,
             ),
             (
@@ -570,12 +566,24 @@ def generate_fisher_output(
               Analysis Data for {ticker}:
               {analysis_data}
 
-              Return the trading signal in this JSON format:
+              CRITICAL: You must respond with valid JSON only, wrapped in markdown code blocks.
+
+              Return the trading signal in exactly this format:
+
+              ```json
               {{
-                "signal": "bullish/bearish/neutral",
-                "confidence": float (0-100),
-                "reasoning": "string"
+                "signal": "bullish",
+                "confidence": 85.0,
+                "reasoning": "Your detailed Phil Fisher-style analysis here"
               }}
+              ```
+
+              Required format rules:
+              - signal: Must be exactly "bullish", "bearish", or "neutral" (include quotes)
+              - confidence: A number between 0.0 and 100.0 (no quotes around numbers)
+              - reasoning: Your complete analysis in quotes as one string
+              - Start response with ```json and end with ```
+              - Use double quotes for all strings, no trailing commas
               """,
             ),
         ]

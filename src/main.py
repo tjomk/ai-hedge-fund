@@ -48,6 +48,7 @@ def run_hedge_fund(
     end_date: str,
     portfolio: dict,
     show_reasoning: bool = False,
+    debug: bool = False,
     selected_analysts: list[str] = [],
     model_name: str = "gpt-4.1",
     model_provider: str = "OpenAI",
@@ -79,6 +80,7 @@ def run_hedge_fund(
                 },
                 "metadata": {
                     "show_reasoning": show_reasoning,
+                    "debug": debug,
                     "model_name": model_name,
                     "model_provider": model_provider,
                 },
@@ -145,6 +147,7 @@ if __name__ == "__main__":
     parser.add_argument("--end-date", type=str, help="End date (YYYY-MM-DD). Defaults to today")
     parser.add_argument("--show-reasoning", action="store_true", help="Show reasoning from each agent")
     parser.add_argument("--show-agent-graph", action="store_true", help="Show the agent graph")
+    parser.add_argument("--debug", action="store_true", help="Enable debug mode - show full LLM prompts and responses")
     parser.add_argument("--ollama", action="store_true", help="Use Ollama for local LLM inference")
 
     args = parser.parse_args()
@@ -314,6 +317,7 @@ if __name__ == "__main__":
         end_date=end_date,
         portfolio=portfolio,
         show_reasoning=args.show_reasoning,
+        debug=args.debug,
         selected_analysts=selected_analysts,
         model_name=model_name,
         model_provider=model_provider,

@@ -47,6 +47,11 @@ def call_llm(
 
     model_info = get_model_info(model_name, model_provider)
     llm = get_model(model_name, model_provider, api_keys)
+    
+    # Check if debug mode is enabled
+    debug_enabled = False
+    if state and state.get("metadata", {}).get("debug", False):
+        debug_enabled = True
 
     # For non-JSON support models, we can use structured output
     if not (model_info and not model_info.has_json_mode()):
@@ -55,17 +60,77 @@ def call_llm(
             method="json_mode",
         )
 
+    # Print debug information if enabled
+    if debug_enabled:
+        print("=" * 80)
+        print("🐛 DEBUG MODE ENABLED - LLM PROMPT")
+        print("=" * 80)
+        print(f"Agent: {agent_name}")
+        print(f"Model: {model_name} ({model_provider})")
+        print(f"Has JSON mode: {not (model_info and not model_info.has_json_mode())}")
+        print(f"Attempt: 1/{max_retries}")
+        print("-" * 80)
+        print("PROMPT:")
+        print("-" * 40)
+        
+        # Handle different prompt formats
+        if hasattr(prompt, 'messages') and prompt.messages:
+            # ChatPromptTemplate with messages
+            for i, message in enumerate(prompt.messages):
+                role = getattr(message, 'type', 'unknown')
+                content = getattr(message, 'content', str(message))
+                print(f"Message {i+1} ({role}):")
+                print(content)
+                print("-" * 20)
+        elif hasattr(prompt, 'to_string'):
+            # Prompt object with to_string method
+            print(prompt.to_string())
+        elif hasattr(prompt, 'content'):
+            # Message with content attribute
+            print(prompt.content)
+        else:
+            # Fallback - convert to string
+            print(str(prompt))
+        
+        print("-" * 40)
+        print("=" * 80)
+    
     # Call the LLM with retries
     for attempt in range(max_retries):
         try:
+            # Print retry information if debug enabled and not first attempt
+            if debug_enabled and attempt > 0:
+                print(f"🔄 DEBUG: Retry attempt {attempt + 1}/{max_retries}")
+            
             # Call the LLM
             result = llm.invoke(prompt)
+            
+            # Print debug response if enabled
+            if debug_enabled:
+                print("=" * 80)
+                print("🐛 DEBUG - LLM RESPONSE")
+                print("=" * 80)
+                print(f"Response type: {type(result)}")
+                if hasattr(result, 'content'):
+                    print("Raw content:")
+                    print("-" * 40)
+                    print(repr(result.content))  # Show escaped version
+                    print("-" * 40)
+                    print("Formatted content:")
+                    print(result.content)
+                else:
+                    print("Response:")
+                    print(result)
+                print("=" * 80)
 
             # For non-JSON support models, we need to extract and parse the JSON manually
             if model_info and not model_info.has_json_mode():
                 parsed_result = extract_json_from_response(result.content)
                 if parsed_result:
                     return pydantic_model(**parsed_result)
+                else:
+                    # JSON extraction failed - raise a descriptive error
+                    raise ValueError(f"Invalid json output: {result.content[:100]}...")
             else:
                 return result
 
@@ -74,7 +139,31 @@ def call_llm(
                 progress.update_status(agent_name, None, f"Error - retry {attempt + 1}/{max_retries}")
 
             if attempt == max_retries - 1:
-                print(f"Error in LLM call after {max_retries} attempts: {e}")
+                error_msg = f"Error in LLM call after {max_retries} attempts: {e}"
+                print("=" * 80)
+                print("LLM CALL FAILED - DEBUGGING INFO")
+                print("=" * 80)
+                print(f"Error: {error_msg}")
+                print(f"Agent: {agent_name}")
+                print(f"Model: {model_name} ({model_provider})")
+                print(f"Has JSON mode: {not (model_info and not model_info.has_json_mode())}")
+                
+                # Show the raw LLM response if it exists and we're dealing with JSON parsing
+                if hasattr(e, '__traceback__') and 'result' in locals():
+                    print(f"\nRAW LLM RESPONSE:")
+                    print("-" * 40)
+                    if hasattr(result, 'content'):
+                        print(repr(result.content))  # Use repr to show escapes/special chars
+                        print("-" * 40)
+                        print("FORMATTED RESPONSE:")
+                        print(result.content)
+                    else:
+                        print(f"Result type: {type(result)}")
+                        print(f"Result: {result}")
+                    print("-" * 40)
+                
+                print("=" * 80)
+                
                 # Use default_factory if provided, otherwise create a basic default
                 if default_factory:
                     return default_factory()
@@ -107,17 +196,77 @@ def create_default_response(model_class: type[BaseModel]) -> BaseModel:
 
 
 def extract_json_from_response(content: str) -> dict | None:
-    """Extracts JSON from markdown-formatted response."""
+    """
+    Extracts JSON from markdown-formatted response.
+    
+    Handles various JSON code block formats that different LLMs produce:
+    - ```json
+    - ```jsonc  
+    - ```jsoncjsonc (Ollama issue)
+    - Plain JSON without code blocks
+    - JSON with extra whitespace/characters
+    """
+    import re
+    
     try:
-        json_start = content.find("```json")
-        if json_start != -1:
-            json_text = content[json_start + 7 :]  # Skip past ```json
-            json_end = json_text.find("```")
-            if json_end != -1:
-                json_text = json_text[:json_end].strip()
-                return json.loads(json_text)
+        # Method 1: Try various code block patterns (most common)
+        patterns = [
+            r'```json\s*\n?(.*?)```',  # Standard ```json
+            r'```jsonc\s*\n?(.*?)```',  # JSON with comments
+            r'```[a-z]*json[a-z]*\s*\n?(.*?)```',  # Malformed json blocks (e.g., jsoncjsonc)
+            r'```\s*\n?(\{.*?\})\s*```',  # Generic code blocks with JSON content
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, content, re.DOTALL | re.IGNORECASE)
+            if match:
+                json_text = match.group(1).strip()
+                if json_text:
+                    return json.loads(json_text)
+        
+        # Method 2: Look for JSON object boundaries without code blocks
+        # Find the first { and last } that form a valid JSON object
+        first_brace = content.find('{')
+        if first_brace != -1:
+            # Find the matching closing brace by counting braces
+            brace_count = 0
+            for i, char in enumerate(content[first_brace:], first_brace):
+                if char == '{':
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        json_text = content[first_brace:i+1]
+                        return json.loads(json_text)
+        
+        # Method 3: Try to extract lines that look like JSON
+        lines = content.split('\n')
+        json_lines = []
+        in_json = False
+        
+        for line in lines:
+            line = line.strip()
+            if line.startswith('{') or in_json:
+                in_json = True
+                json_lines.append(line)
+                if line.endswith('}') and line.count('}') >= line.count('{'):
+                    json_text = '\n'.join(json_lines)
+                    try:
+                        return json.loads(json_text)
+                    except:
+                        continue
+        
     except Exception as e:
-        print(f"Error extracting JSON from response: {e}")
+        print(f"JSON EXTRACTION DEBUG:")
+        print(f"Error: {e}")
+        print(f"Content length: {len(content)}")
+        print(f"Content preview (first 300 chars):")
+        print(repr(content[:300]))
+        print(f"Content preview (formatted):")
+        print(content[:300])
+        if len(content) > 300:
+            print(f"... (truncated, total length: {len(content)} chars)")
+    
     return None
 
 

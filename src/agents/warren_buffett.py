@@ -210,7 +210,7 @@ def analyze_consistency(financial_line_items: list) -> dict[str, any]:
     reasoning = []
 
     # Check earnings growth trend
-    earnings_values = [item.net_income for item in financial_line_items if item.net_income]
+    earnings_values = [item.net_income for item in financial_line_items if hasattr(item, 'net_income') and item.net_income]
     if len(earnings_values) >= 4:
         # Simple check: is each period's earnings bigger than the next?
         earnings_growth = all(earnings_values[i] > earnings_values[i + 1] for i in range(len(earnings_values) - 1))
@@ -384,9 +384,9 @@ def calculate_owner_earnings(financial_line_items: list) -> dict[str, any]:
     details = []
 
     # Core components
-    net_income = latest.net_income
-    depreciation = latest.depreciation_and_amortization
-    capex = latest.capital_expenditure
+    net_income = getattr(latest, 'net_income', None)
+    depreciation = getattr(latest, 'depreciation_and_amortization', None)
+    capex = getattr(latest, 'capital_expenditure', None)
 
     if not all([net_income is not None, depreciation is not None, capex is not None]):
         missing = []
@@ -807,12 +807,24 @@ def generate_buffett_output(
                 COMPREHENSIVE ANALYSIS DATA:
                 {analysis_data}
 
-                Please provide your investment decision in exactly this JSON format:
+                CRITICAL: You must respond with valid JSON only, wrapped in markdown code blocks.
+
+                Provide your investment decision in exactly this format:
+
+                ```json
                 {{
-                  "signal": "bullish" | "bearish" | "neutral",
-                  "confidence": float between 0 and 100,
-                  "reasoning": "string with your detailed Warren Buffett-style analysis"
+                  "signal": "bullish",
+                  "confidence": 75.5,
+                  "reasoning": "Your detailed Warren Buffett-style analysis here"
                 }}
+                ```
+
+                Required format rules:
+                - signal: Must be exactly "bullish", "bearish", or "neutral" (include quotes)
+                - confidence: A number between 0.0 and 100.0 (no quotes around numbers)
+                - reasoning: Your complete analysis in quotes as one string
+                - Start response with ```json and end with ```
+                - Use double quotes for all strings, no trailing commas
 
                 In your reasoning, be specific about:
                 1. Whether this falls within your circle of competence and why (CRITICAL FIRST STEP)

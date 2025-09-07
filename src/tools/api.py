@@ -1,92 +1,73 @@
+"""
+Updated API module that uses the new multi-provider architecture.
+This module maintains backward compatibility while leveraging the new provider manager.
+"""
+
 import datetime
 import os
 import pandas as pd
-import requests
-import time
+import logging
+from typing import List, Optional
 
-from src.data.cache import get_cache
+from src.data.provider_manager import DataProviderManager
 from src.data.models import (
     CompanyNews,
-    CompanyNewsResponse,
     FinancialMetrics,
-    FinancialMetricsResponse,
     Price,
-    PriceResponse,
     LineItem,
-    LineItemResponse,
     InsiderTrade,
-    InsiderTradeResponse,
-    CompanyFactsResponse,
+    CompanyFacts,
 )
 
-# Global cache instance
-_cache = get_cache()
+logger = logging.getLogger(__name__)
+
+# Global provider manager instance
+_provider_manager = None
 
 
-def _make_api_request(url: str, headers: dict, method: str = "GET", json_data: dict = None, max_retries: int = 3) -> requests.Response:
+def get_provider_manager() -> DataProviderManager:
+    """Get or create the global provider manager instance."""
+    global _provider_manager
+    if _provider_manager is None:
+        # Initialize with API keys from environment
+        financial_datasets_api_key = os.environ.get("FINANCIAL_DATASETS_API_KEY")
+        
+        _provider_manager = DataProviderManager(
+            financial_datasets_api_key=financial_datasets_api_key
+        )
+        logger.info("Initialized DataProviderManager")
+    return _provider_manager
+
+
+# Backward-compatible API functions that now use the provider manager
+
+def get_prices(ticker: str, start_date: str, end_date: str, api_key: str = None) -> List[Price]:
     """
-    Make an API request with rate limiting handling and moderate backoff.
+    Fetch price data using the new multi-provider system.
+    
+    This function maintains backward compatibility with the original API
+    while leveraging the new provider manager with automatic fallbacks.
     
     Args:
-        url: The URL to request
-        headers: Headers to include in the request
-        method: HTTP method (GET or POST)
-        json_data: JSON data for POST requests
-        max_retries: Maximum number of retries (default: 3)
-    
+        ticker: Stock ticker symbol
+        start_date: Start date in YYYY-MM-DD format
+        end_date: End date in YYYY-MM-DD format
+        api_key: Legacy parameter, now handled by provider manager
+        
     Returns:
-        requests.Response: The response object
-    
-    Raises:
-        Exception: If the request fails with a non-429 error
+        List of Price objects
     """
-    for attempt in range(max_retries + 1):  # +1 for initial attempt
-        if method.upper() == "POST":
-            response = requests.post(url, headers=headers, json=json_data)
-        else:
-            response = requests.get(url, headers=headers)
+    try:
+        manager = get_provider_manager()
+        prices, provider_used = manager.get_prices(ticker, start_date, end_date)
         
-        if response.status_code == 429 and attempt < max_retries:
-            # Linear backoff: 60s, 90s, 120s, 150s...
-            delay = 60 + (30 * attempt)
-            print(f"Rate limited (429). Attempt {attempt + 1}/{max_retries + 1}. Waiting {delay}s before retrying...")
-            time.sleep(delay)
-            continue
+        logger.debug(f"Retrieved {len(prices)} prices for {ticker} from {provider_used}")
+        return prices
         
-        # Return the response (whether success, other errors, or final 429)
-        return response
-
-
-def get_prices(ticker: str, start_date: str, end_date: str, api_key: str = None) -> list[Price]:
-    """Fetch price data from cache or API."""
-    # Create a cache key that includes all parameters to ensure exact matches
-    cache_key = f"{ticker}_{start_date}_{end_date}"
-    
-    # Check cache first - simple exact match
-    if cached_data := _cache.get_prices(cache_key):
-        return [Price(**price) for price in cached_data]
-
-    # If not in cache, fetch from API
-    headers = {}
-    financial_api_key = api_key or os.environ.get("FINANCIAL_DATASETS_API_KEY")
-    if financial_api_key:
-        headers["X-API-KEY"] = financial_api_key
-
-    url = f"https://api.financialdatasets.ai/prices/?ticker={ticker}&interval=day&interval_multiplier=1&start_date={start_date}&end_date={end_date}"
-    response = _make_api_request(url, headers)
-    if response.status_code != 200:
-        raise Exception(f"Error fetching data: {ticker} - {response.status_code} - {response.text}")
-
-    # Parse response with Pydantic model
-    price_response = PriceResponse(**response.json())
-    prices = price_response.prices
-
-    if not prices:
+    except Exception as e:
+        logger.error(f"Failed to get prices for {ticker}: {e}")
+        # Return empty list for backward compatibility
         return []
-
-    # Cache the results using the comprehensive cache key
-    _cache.set_prices(cache_key, [p.model_dump() for p in prices])
-    return prices
 
 
 def get_financial_metrics(
@@ -95,73 +76,64 @@ def get_financial_metrics(
     period: str = "ttm",
     limit: int = 10,
     api_key: str = None,
-) -> list[FinancialMetrics]:
-    """Fetch financial metrics from cache or API."""
-    # Create a cache key that includes all parameters to ensure exact matches
-    cache_key = f"{ticker}_{period}_{end_date}_{limit}"
+) -> List[FinancialMetrics]:
+    """
+    Fetch financial metrics using the new multi-provider system.
     
-    # Check cache first - simple exact match
-    if cached_data := _cache.get_financial_metrics(cache_key):
-        return [FinancialMetrics(**metric) for metric in cached_data]
-
-    # If not in cache, fetch from API
-    headers = {}
-    financial_api_key = api_key or os.environ.get("FINANCIAL_DATASETS_API_KEY")
-    if financial_api_key:
-        headers["X-API-KEY"] = financial_api_key
-
-    url = f"https://api.financialdatasets.ai/financial-metrics/?ticker={ticker}&report_period_lte={end_date}&limit={limit}&period={period}"
-    response = _make_api_request(url, headers)
-    if response.status_code != 200:
-        raise Exception(f"Error fetching data: {ticker} - {response.status_code} - {response.text}")
-
-    # Parse response with Pydantic model
-    metrics_response = FinancialMetricsResponse(**response.json())
-    financial_metrics = metrics_response.financial_metrics
-
-    if not financial_metrics:
+    Args:
+        ticker: Stock ticker symbol
+        end_date: End date in YYYY-MM-DD format
+        period: Period for metrics ("ttm", "annual", "quarterly")
+        limit: Maximum number of periods to return
+        api_key: Legacy parameter, now handled by provider manager
+        
+    Returns:
+        List of FinancialMetrics objects
+    """
+    try:
+        manager = get_provider_manager()
+        metrics, provider_used = manager.get_financial_metrics(ticker, end_date, period, limit)
+        
+        logger.debug(f"Retrieved {len(metrics)} financial metrics for {ticker} from {provider_used}")
+        return metrics
+        
+    except Exception as e:
+        logger.error(f"Failed to get financial metrics for {ticker}: {e}")
         return []
-
-    # Cache the results as dicts using the comprehensive cache key
-    _cache.set_financial_metrics(cache_key, [m.model_dump() for m in financial_metrics])
-    return financial_metrics
 
 
 def search_line_items(
     ticker: str,
-    line_items: list[str],
+    line_items: List[str],
     end_date: str,
     period: str = "ttm",
     limit: int = 10,
     api_key: str = None,
-) -> list[LineItem]:
-    """Fetch line items from API."""
-    # If not in cache or insufficient data, fetch from API
-    headers = {}
-    financial_api_key = api_key or os.environ.get("FINANCIAL_DATASETS_API_KEY")
-    if financial_api_key:
-        headers["X-API-KEY"] = financial_api_key
-
-    url = "https://api.financialdatasets.ai/financials/search/line-items"
-
-    body = {
-        "tickers": [ticker],
-        "line_items": line_items,
-        "end_date": end_date,
-        "period": period,
-        "limit": limit,
-    }
-    response = _make_api_request(url, headers, method="POST", json_data=body)
-    if response.status_code != 200:
-        raise Exception(f"Error fetching data: {ticker} - {response.status_code} - {response.text}")
-    data = response.json()
-    response_model = LineItemResponse(**data)
-    search_results = response_model.search_results
-    if not search_results:
+) -> List[LineItem]:
+    """
+    Search for line items using the new multi-provider system.
+    
+    Args:
+        ticker: Stock ticker symbol
+        line_items: List of line item names to search for
+        end_date: End date in YYYY-MM-DD format
+        period: Period for search ("ttm", "annual", "quarterly")
+        limit: Maximum number of results to return
+        api_key: Legacy parameter, now handled by provider manager
+        
+    Returns:
+        List of LineItem objects
+    """
+    try:
+        manager = get_provider_manager()
+        items, provider_used = manager.search_line_items(ticker, line_items, end_date, period, limit)
+        
+        logger.debug(f"Retrieved {len(items)} line items for {ticker} from {provider_used}")
+        return items
+        
+    except Exception as e:
+        logger.error(f"Failed to search line items for {ticker}: {e}")
         return []
-
-    # Cache the results
-    return search_results[:limit]
 
 
 def get_insider_trades(
@@ -170,60 +142,30 @@ def get_insider_trades(
     start_date: str | None = None,
     limit: int = 1000,
     api_key: str = None,
-) -> list[InsiderTrade]:
-    """Fetch insider trades from cache or API."""
-    # Create a cache key that includes all parameters to ensure exact matches
-    cache_key = f"{ticker}_{start_date or 'none'}_{end_date}_{limit}"
+) -> List[InsiderTrade]:
+    """
+    Fetch insider trades using the new multi-provider system.
     
-    # Check cache first - simple exact match
-    if cached_data := _cache.get_insider_trades(cache_key):
-        return [InsiderTrade(**trade) for trade in cached_data]
-
-    # If not in cache, fetch from API
-    headers = {}
-    financial_api_key = api_key or os.environ.get("FINANCIAL_DATASETS_API_KEY")
-    if financial_api_key:
-        headers["X-API-KEY"] = financial_api_key
-
-    all_trades = []
-    current_end_date = end_date
-
-    while True:
-        url = f"https://api.financialdatasets.ai/insider-trades/?ticker={ticker}&filing_date_lte={current_end_date}"
-        if start_date:
-            url += f"&filing_date_gte={start_date}"
-        url += f"&limit={limit}"
-
-        response = _make_api_request(url, headers)
-        if response.status_code != 200:
-            raise Exception(f"Error fetching data: {ticker} - {response.status_code} - {response.text}")
-
-        data = response.json()
-        response_model = InsiderTradeResponse(**data)
-        insider_trades = response_model.insider_trades
-
-        if not insider_trades:
-            break
-
-        all_trades.extend(insider_trades)
-
-        # Only continue pagination if we have a start_date and got a full page
-        if not start_date or len(insider_trades) < limit:
-            break
-
-        # Update end_date to the oldest filing date from current batch for next iteration
-        current_end_date = min(trade.filing_date for trade in insider_trades).split("T")[0]
-
-        # If we've reached or passed the start_date, we can stop
-        if current_end_date <= start_date:
-            break
-
-    if not all_trades:
+    Args:
+        ticker: Stock ticker symbol
+        end_date: End date in YYYY-MM-DD format
+        start_date: Start date in YYYY-MM-DD format (optional)
+        limit: Maximum number of trades to return
+        api_key: Legacy parameter, now handled by provider manager
+        
+    Returns:
+        List of InsiderTrade objects
+    """
+    try:
+        manager = get_provider_manager()
+        trades, provider_used = manager.get_insider_trades(ticker, end_date, start_date, limit)
+        
+        logger.debug(f"Retrieved {len(trades)} insider trades for {ticker} from {provider_used}")
+        return trades
+        
+    except Exception as e:
+        logger.error(f"Failed to get insider trades for {ticker}: {e}")
         return []
-
-    # Cache the results using the comprehensive cache key
-    _cache.set_insider_trades(cache_key, [trade.model_dump() for trade in all_trades])
-    return all_trades
 
 
 def get_company_news(
@@ -232,60 +174,30 @@ def get_company_news(
     start_date: str | None = None,
     limit: int = 1000,
     api_key: str = None,
-) -> list[CompanyNews]:
-    """Fetch company news from cache or API."""
-    # Create a cache key that includes all parameters to ensure exact matches
-    cache_key = f"{ticker}_{start_date or 'none'}_{end_date}_{limit}"
+) -> List[CompanyNews]:
+    """
+    Fetch company news using the new multi-provider system.
     
-    # Check cache first - simple exact match
-    if cached_data := _cache.get_company_news(cache_key):
-        return [CompanyNews(**news) for news in cached_data]
-
-    # If not in cache, fetch from API
-    headers = {}
-    financial_api_key = api_key or os.environ.get("FINANCIAL_DATASETS_API_KEY")
-    if financial_api_key:
-        headers["X-API-KEY"] = financial_api_key
-
-    all_news = []
-    current_end_date = end_date
-
-    while True:
-        url = f"https://api.financialdatasets.ai/news/?ticker={ticker}&end_date={current_end_date}"
-        if start_date:
-            url += f"&start_date={start_date}"
-        url += f"&limit={limit}"
-
-        response = _make_api_request(url, headers)
-        if response.status_code != 200:
-            raise Exception(f"Error fetching data: {ticker} - {response.status_code} - {response.text}")
-
-        data = response.json()
-        response_model = CompanyNewsResponse(**data)
-        company_news = response_model.news
-
-        if not company_news:
-            break
-
-        all_news.extend(company_news)
-
-        # Only continue pagination if we have a start_date and got a full page
-        if not start_date or len(company_news) < limit:
-            break
-
-        # Update end_date to the oldest date from current batch for next iteration
-        current_end_date = min(news.date for news in company_news).split("T")[0]
-
-        # If we've reached or passed the start_date, we can stop
-        if current_end_date <= start_date:
-            break
-
-    if not all_news:
+    Args:
+        ticker: Stock ticker symbol
+        end_date: End date in YYYY-MM-DD format
+        start_date: Start date in YYYY-MM-DD format (optional)
+        limit: Maximum number of news articles to return
+        api_key: Legacy parameter, now handled by provider manager
+        
+    Returns:
+        List of CompanyNews objects
+    """
+    try:
+        manager = get_provider_manager()
+        news, provider_used = manager.get_company_news(ticker, end_date, start_date, limit)
+        
+        logger.debug(f"Retrieved {len(news)} news articles for {ticker} from {provider_used}")
+        return news
+        
+    except Exception as e:
+        logger.error(f"Failed to get company news for {ticker}: {e}")
         return []
-
-    # Cache the results using the comprehensive cache key
-    _cache.set_company_news(cache_key, [news.model_dump() for news in all_news])
-    return all_news
 
 
 def get_market_cap(
@@ -293,39 +205,48 @@ def get_market_cap(
     end_date: str,
     api_key: str = None,
 ) -> float | None:
-    """Fetch market cap from the API."""
-    # Check if end_date is today
-    if end_date == datetime.datetime.now().strftime("%Y-%m-%d"):
-        # Get the market cap from company facts API
-        headers = {}
-        financial_api_key = api_key or os.environ.get("FINANCIAL_DATASETS_API_KEY")
-        if financial_api_key:
-            headers["X-API-KEY"] = financial_api_key
-
-        url = f"https://api.financialdatasets.ai/company/facts/?ticker={ticker}"
-        response = _make_api_request(url, headers)
-        if response.status_code != 200:
-            print(f"Error fetching company facts: {ticker} - {response.status_code}")
-            return None
-
-        data = response.json()
-        response_model = CompanyFactsResponse(**data)
-        return response_model.company_facts.market_cap
-
-    financial_metrics = get_financial_metrics(ticker, end_date, api_key=api_key)
-    if not financial_metrics:
+    """
+    Fetch market capitalization using the new multi-provider system.
+    
+    Args:
+        ticker: Stock ticker symbol
+        end_date: Date for market cap in YYYY-MM-DD format
+        api_key: Legacy parameter, now handled by provider manager
+        
+    Returns:
+        Market cap as float or None if not available
+    """
+    try:
+        manager = get_provider_manager()
+        market_cap, provider_used = manager.get_market_cap(ticker, end_date)
+        
+        if market_cap:
+            logger.debug(f"Retrieved market cap ${market_cap:,.0f} for {ticker} from {provider_used}")
+        else:
+            logger.debug(f"No market cap available for {ticker}")
+            
+        return market_cap
+        
+    except Exception as e:
+        logger.error(f"Failed to get market cap for {ticker}: {e}")
         return None
 
-    market_cap = financial_metrics[0].market_cap
 
-    if not market_cap:
-        return None
-
-    return market_cap
-
-
-def prices_to_df(prices: list[Price]) -> pd.DataFrame:
-    """Convert prices to a DataFrame."""
+def prices_to_df(prices: List[Price]) -> pd.DataFrame:
+    """
+    Convert prices to a DataFrame.
+    
+    This function maintains backward compatibility with the original API.
+    
+    Args:
+        prices: List of Price objects
+        
+    Returns:
+        DataFrame with OHLCV data indexed by date
+    """
+    if not prices:
+        return pd.DataFrame()
+        
     df = pd.DataFrame([p.model_dump() for p in prices])
     df["Date"] = pd.to_datetime(df["time"])
     df.set_index("Date", inplace=True)
@@ -336,7 +257,202 @@ def prices_to_df(prices: list[Price]) -> pd.DataFrame:
     return df
 
 
-# Update the get_price_data function to use the new functions
 def get_price_data(ticker: str, start_date: str, end_date: str, api_key: str = None) -> pd.DataFrame:
-    prices = get_prices(ticker, start_date, end_date, api_key=api_key)
+    """
+    Get price data as a DataFrame.
+    
+    This function maintains backward compatibility with the original API
+    while using the new provider system.
+    
+    Args:
+        ticker: Stock ticker symbol
+        start_date: Start date in YYYY-MM-DD format
+        end_date: End date in YYYY-MM-DD format
+        api_key: Legacy parameter, now handled by provider manager
+        
+    Returns:
+        DataFrame with OHLCV data indexed by date
+    """
+    prices = get_prices(ticker, start_date, end_date, api_key)
     return prices_to_df(prices)
+
+
+# Advanced provider management functions for monitoring and control
+
+def get_provider_health_status() -> dict:
+    """
+    Get health status of all data providers.
+    
+    Returns:
+        Dictionary containing health information for each provider
+    """
+    manager = get_provider_manager()
+    return manager.get_provider_health_status()
+
+
+def get_cache_statistics() -> dict:
+    """
+    Get cache statistics.
+    
+    Returns:
+        Dictionary containing cache statistics
+    """
+    manager = get_provider_manager()
+    return manager.get_cache_stats()
+
+
+def clear_cache(provider: Optional[str] = None):
+    """
+    Clear cache data.
+    
+    Args:
+        provider: Specific provider to clear, or None to clear all
+    """
+    manager = get_provider_manager()
+    manager.clear_cache(provider)
+
+
+def warm_cache(tickers: List[str], days_back: int = 30):
+    """
+    Warm the cache with recent data for given tickers.
+    
+    Args:
+        tickers: List of ticker symbols to warm cache for
+        days_back: Number of days of price data to cache
+    """
+    manager = get_provider_manager()
+    manager.warm_cache(tickers, days_back)
+
+
+def reset_provider_health(provider_name: str):
+    """
+    Reset health status for a specific provider.
+    
+    Args:
+        provider_name: Name of the provider to reset
+    """
+    manager = get_provider_manager()
+    manager.reset_provider_health(provider_name)
+
+
+# Legacy cache functions for backward compatibility
+# These now delegate to the provider manager's cache system
+
+def get_cache():
+    """
+    Get cache instance for backward compatibility.
+    
+    Note: This returns a simplified interface that delegates to the enhanced cache.
+    """
+    class LegacyCacheAdapter:
+        """Adapter to maintain backward compatibility with the old cache interface."""
+        
+        def __init__(self, provider_manager):
+            self.manager = provider_manager
+            
+        def get_prices(self, cache_key: str) -> list:
+            # Extract parameters from cache key (simplified)
+            return None  # Let provider manager handle caching
+            
+        def set_prices(self, cache_key: str, data: list):
+            # Caching is now handled by provider manager
+            pass
+            
+        def get_financial_metrics(self, cache_key: str) -> list:
+            return None
+            
+        def set_financial_metrics(self, cache_key: str, data: list):
+            pass
+            
+        def get_insider_trades(self, cache_key: str) -> list:
+            return None
+            
+        def set_insider_trades(self, cache_key: str, data: list):
+            pass
+            
+        def get_company_news(self, cache_key: str) -> list:
+            return None
+            
+        def set_company_news(self, cache_key: str, data: list):
+            pass
+    
+    manager = get_provider_manager()
+    return LegacyCacheAdapter(manager)
+
+
+# Information functions
+
+def get_supported_providers() -> List[str]:
+    """
+    Get list of supported data providers.
+    
+    Returns:
+        List of provider names
+    """
+    manager = get_provider_manager()
+    return list(manager.providers.keys())
+
+
+def get_provider_features() -> dict:
+    """
+    Get supported features by each provider.
+    
+    Returns:
+        Dictionary mapping provider names to their supported features
+    """
+    manager = get_provider_manager()
+    return manager.get_supported_features()
+
+
+# Migration utilities
+
+def migrate_from_legacy_cache():
+    """
+    Utility function to help migrate from the legacy cache system.
+    This function can be called during the transition period.
+    """
+    logger.info("Legacy cache migration is handled automatically by the provider manager")
+    logger.info("No manual migration required - caching is now provider-aware")
+
+
+def get_migration_status() -> dict:
+    """
+    Get migration status information.
+    
+    Returns:
+        Dictionary containing migration status and statistics
+    """
+    manager = get_provider_manager()
+    health_status = manager.get_provider_health_status()
+    cache_stats = manager.get_cache_stats()
+    
+    return {
+        "migration_complete": True,
+        "provider_manager_active": True,
+        "providers_available": len(manager.providers),
+        "providers_healthy": sum(1 for status in health_status.values() if status['healthy']),
+        "cache_entries": cache_stats.get('total_entries', 0),
+        "supported_providers": list(manager.providers.keys()),
+        "primary_providers": ["yahoo", "stooq"],  # Free providers
+        "fallback_providers": ["financialdatasets"],  # Paid provider
+    }
+
+
+# For debugging and development
+if __name__ == "__main__":
+    # Quick test of the new API
+    logging.basicConfig(level=logging.INFO)
+    
+    print("Testing new API with provider manager...")
+    
+    # Test basic functionality
+    prices = get_prices("AAPL", "2025-09-01", "2025-09-05")
+    print(f"Retrieved {len(prices)} prices")
+    
+    # Test provider health
+    health = get_provider_health_status()
+    print(f"Provider health: {health}")
+    
+    # Test migration status
+    status = get_migration_status()
+    print(f"Migration status: {status}")

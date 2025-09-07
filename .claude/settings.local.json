@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(mkdir:*)",
+      "Bash(poetry install:*)",
+      "Bash(poetry run:*)",
+      "Bash(git checkout:*)",
+      "WebFetch(domain:developers.lseg.com)",
+      "Bash(poetry add:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

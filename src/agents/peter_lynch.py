@@ -461,12 +461,24 @@ def generate_lynch_output(
                 - Provide key positives and negatives
                 - Conclude with a clear stance (bullish, bearish, or neutral)
                 
-                Return your final output strictly in JSON with the fields:
+                CRITICAL: You must respond with valid JSON only, wrapped in markdown code blocks.
+
+                Return your final output in exactly this format:
+
+                ```json
                 {{
-                  "signal": "bullish" | "bearish" | "neutral",
-                  "confidence": 0 to 100,
-                  "reasoning": "string"
+                  "signal": "bullish",
+                  "confidence": 85.0,
+                  "reasoning": "Your detailed Peter Lynch-style analysis here"
                 }}
+                ```
+
+                Required format rules:
+                - signal: Must be exactly "bullish", "bearish", or "neutral" (include quotes)
+                - confidence: A number between 0.0 and 100.0 (no quotes around numbers)
+                - reasoning: Your complete analysis in quotes as one string
+                - Start response with ```json and end with ```
+                - Use double quotes for all strings, no trailing commas
                 """,
             ),
             (
